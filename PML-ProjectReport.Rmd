@@ -1,0 +1,179 @@
+---
+title: "How People Do Exercise - A Predictive Analysis"
+author: "Chuan Zhang"
+output:
+  html_document:
+    highlight: monochrome
+    theme: spacelab
+    toc: yes
+---
+```{r head, echo=FALSE}
+setwd("C:/Users/Chuan/My Study/CourseRA/JHU8 - Practical Machine Learning/5 My Projects")
+library(knitr)
+opts_chunk$set(echo=TRUE, results="asis", warnings=FALSE, cache=TRUE, cache.path = 'PA2_template_cache/', fig.path='figure/')
+```
+
+## Synopsis
+
+This report designs machine learning algorithms for recognizing which type of the weight lifting exercise is, given the data consists of up to values of 160 variables. The <i><a href="http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises">weight lifting exercises</a></i> (<strong>WLE</strong>) dataset [1] is provided by <strong><a href="http://groupware.les.inf.puc-rio.br/har">Groupware</a></strong>. The data were recorded from the accelerometers weared on the belt, forearm, arm, and dumbbell of 6 participants, who were asked to perform one set of 10 repetitions of the unilateral dumbbell biceps curl in five different fashions: <i>exactly according to the specification</i> (<strong>Class A</strong>), <i>throwing the elbows to the front</i> (<strong>Class B</strong>), <i>lifting the dumbbell only halfway</i> (<strong>Class C</strong>), <i>lowering the dumbbell only halfway</i> (<strong>Class D</strong>) and <i>throwing the hips to the front</i> (<strong>Class E</strong>).
+
+The goal of this project is to predict the manner in which the participants did the exercise. Based on part of these data (training set), both decision trees and random forest models are built for predictions, and accuracy of these models are tested and compared on the other part of these data (testing set).
+
+Our result shows that, in comparison to that of the <strong>decision tree</strong> method (prediction accuracy on cross-validation data set: <code>87.87%</code>), <strong>random forest</strong> model gives very accurate predictions (prediction accuracy on cross-validation data set: <code>99.8%</code> with <code>ntree=20</code>). While with <code>ntree=5</code>, the prediction accuracy on the cross-validation data set reaches <code>99.37%</code>, random forest model with <code>ntree=1</code> (prediction accuracy on the cross-validation data set: <code>93.6%</code>) is enough to get all predictions on the test set correct.
+
+The report is organized as follows. In the second section, we conduct exploratory analysis on the <a href="http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises"><strong>WLE</strong></a> data sets (both for training and testing), split the training data set into (real) training and cross-validation sets, and make the data sets tidy. Then in the third section, we train both the decision tree and random forest models on the training set, and compare their accuracy on the cross-validation set. In the last section, we apply both the trained model on the test set, and report the best prediction. 
+
+## Preprocessing Data
+
+```{r Loading Data, warning=FALSE}
+data.raw <- read.csv("pml-training.csv")
+test.raw <- read.csv("pml-testing.csv")
+```
+
+Notice that both the training set and the testing set contain many columns (variables) with missing values or <code>#DIV/0!</code>, we decide to remove these non-informative columns from both the training set and testing set. Also, as the first column contains nothing but row numbers, so we also remove this column from both data sets.
+
+```{r preprocess training data, warning=FALSE}
+data <- data.raw
+data[data==""] <- NA
+data$cvtd_timestamp <- as.character(data$cvtd_timestamp)
+data$cvtd_timestamp <- strptime(data$cvtd_timestamp, "%d/%m/%Y %H:%M")
+
+data.num <- data.frame(data[,3:4],data[,7:(dim(data)[2]-1)])
+for(i in 1:dim(data.num)[2])
+{
+    if(!is.numeric(data.num[1,i]))
+    {
+        data.num[,i] <- as.numeric(as.character(data.num[,i]))
+    }
+}
+data.num <- data.num[,!is.na(colSums(data.num))]
+data.no.cna <- data.frame(data[,1:2],data.num[,1:2],
+                          data[,5:6],data.num[,3:dim(data.num)[2]],
+                          data[,dim(data)[2]])
+names(data.no.cna)[c(1:2,dim(data.no.cna)[2])] <- 
+    names(data)[c(1:2,dim(data)[2])]
+```
+
+```{r preprocess testing data set, warning=FALSE, echo=FALSE}
+test <- test.raw
+test[test==""] <- NA
+test$cvtd_timestamp <- as.character(test$cvtd_timestamp)
+test$cvtd_timestamp <- strptime(test$cvtd_timestamp, "%d/%m/%Y %H:%M")
+
+test.num <- data.frame(test[,3:4],test[,7:(dim(test)[2]-1)])
+for(j in 1:dim(test.num)[2])
+{
+    if(!is.numeric(test.num[1,j]))
+    {
+        test.num[,j] <- as.numeric(as.character(test.num[,j]))
+    }
+}
+test.num <- test.num[,!is.na(colSums(test.num))]
+test.no.cna <- data.frame(test[,1:2],test.num[,1:2],
+                          test[,5:6],test.num[,3:dim(test.num)[2]],
+                          test[,dim(test)[2]])
+names(test.no.cna)[c(1:2,dim(test.no.cna)[2])] <- 
+    names(test)[c(1:2,dim(test)[2])]
+```
+
+We take the rest variables (columns) as our features for training the models and making predictions. To check the in-sample accuracy of the two models we are going to train in this report, we also randomly select around 3/4 observations for training, and keep the rest for cross-validation.
+
+```{r Preparing for decision tree training, warning=FALSE, results="hide"}
+library(caret)
+features.train <- data.frame(data.no.cna[,c(2:4,6:(dim(data.no.cna)[2]))])
+set.seed(5425)
+inTrain <- createDataPartition(features.train$user_name,p=3/4,list=FALSE)
+data.train <- features.train[inTrain,]
+data.cv <- features.train[-inTrain,]
+```
+
+## Comparing Decision Tree Model with Random Forest Model
+
+### Decision Tree Model and In-Sample Accuracy
+```{r Train decision tree model, warning=FALSE, results="hide",fig.width=10,fig.height=5}
+library(rattle)
+library(rpart)
+modFit_DTree <- rpart(classe ~ ., data=data.train)
+fancyRpartPlot(modFit_DTree)
+```
+
+```{r Check DTree accuracy on the cross validation data set, warning=FALSE}
+pred_DTree <- predict(modFit_DTree, newdata=data.cv, type="class")
+Accuracy_DTree <- confusionMatrix(table(pred_DTree,data.cv$classe))
+```
+
+The in-sample accuracy of the decision tree model is obtained as follows
+
+|Accuracy|95% CI|No Information Rate|P-Value [Acc > NIR]|
+|:------:|:----:|:-----------------:|:-----------------:|
+|`r Accuracy_DTree$overall[1]`|(`r Accuracy_DTree$overall[3]`,`r Accuracy_DTree$overall[4]`)|`r Accuracy_DTree$overall[5]`|`r Accuracy_DTree$overall[6]`|
+
+### Random Forest Model and In-Sample Accuracy
+
+The number of trees, <code>ntree</code>, is an important parameter for training the random forest model. To find an optimal setting for this paramter, we train the models with different <code>ntree</code> values and compare their respective in-sample accuracy.
+
+```{r Exploring Optimal value for ntree parameter, warning=FALSE, results="hide", fig.width=6, fig.height=3}
+library(randomForest)
+library(ggplot2)
+Accuracy_RF <- rep(0,20)
+set.seed(2609)
+for(i in 1:20)
+{
+    modFit_RF <- randomForest(classe ~ ., data=data.train, ntree=i)
+    pred_RF <- predict(modFit_RF, newdata=data.cv)
+    Accuracy <- confusionMatrix(table(pred_RF,data.cv$classe))
+    Accuracy_RF[i] <- Accuracy$overall[1]
+}
+ggplot(data.frame(ntree=1:20,Accuracy=Accuracy_RF), aes(x=ntree, y=Accuracy)) +
+    geom_line(size = 1, col="blue") +
+    geom_point(size = 4, col="red", pch=0)
+```
+
+From the above figure, we can see that for <code>ntree > 7</code>, the prediction accuracy of the model does not increase significantly with the number of trees. Therefore, to keep our model as simple as possible and with prediction accuracy as high as possible, we choose <code>ntree=10</code> to train our random forest model for final prediction.
+
+```{r Train random forest model with 10 trees, warning=FALSE}
+set.seed(2609)
+modFit_RF <- randomForest(classe ~ ., data=data.train, ntree=10)
+pred_RF <- predict(modFit_RF, newdata=data.cv)
+Accuracy_RF <- confusionMatrix(table(pred_RF,data.cv$classe))
+```
+
+The in-sample accuracy of our random forest model is obtained as follows
+
+|Accuracy|95% CI|No Information Rate|P-Value [Acc > NIR]|
+|:------:|:----:|:-----------------:|:-----------------:|
+|`r Accuracy_RF$overall[1]`|(`r Accuracy_RF$overall[3]`,`r Accuracy_RF$overall[4]`)|`r Accuracy_RF$overall[5]`|`r Accuracy_RF$overall[6]`|
+
+
+## Make Prediction on Test Set
+
+In the previous section, we have seen that the random forest model is much more accurate than the decision tree model. In this section, we use both the decision tree model and the random forest model with <code>ntree=10</code> we trained in the previous section to make prediction on the test data set.
+
+```{r Make predictions on the test set, warning=FALSE}
+features.test <- data.frame(test.no.cna[,c(2:4,6:(dim(test.no.cna)[2]-1))])
+features.test$classe <- tail(data.cv$classe,n=20)
+for(i in 1:ncol(features.test))
+{
+    class(features.test[,i]) <- class(data.train[,i])
+}
+names(features.test) <- names(data.train)
+x <- rbind(data.cv[100,],features.test)
+features.test <- x[2:21,]
+rownames(features.test) <- 1:20
+
+answers_DTree <- predict(modFit_DTree, newdata=features.test, type="class")
+answers_RF <- predict(modFit_RF, newdata=features.test)
+```
+
+The prediction the decision tree model and the random forest model made are
+
+<strong>`r answers_DTree`</strong>
+
+and
+
+<strong>`r answers_RF`</strong>
+
+By submitting the predictions to the course website, we find that the predictions the random forest model made are all correct. We also notice that for random forest model, even <code>ntree=1</code> is enough to have all predictions correct.
+
+## Reference
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. <strong>Qualitative Activity Recognition of Weight Lifting Exercises.</strong> <i>Proceedings of 4th International Conference in Cooperation with SIGCHI</i> (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
